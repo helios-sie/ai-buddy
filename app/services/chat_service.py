@@ -1,71 +1,63 @@
-# app/services/chat_service.py
-
+from app.services.memory_service import memory_service
 from app.services.emotion_service import analyze_emotion
-from app.services.personality_engine import (
-    load_personality,
-    update_personality,
-    apply_personality,
-)
-from app.services.memory_service import (
-    save_message,
-    get_recent_memory
-)
+
 
 def generate_reply(user_id: str, message: str):
     """
-    Main chat logic:
-    - analyze emotions
-    - update personality
-    - fetch recent memory
-    - generate personalized response
+    Main conversational logic.
+    Uses:
+      - emotion engine
+      - memory similarity
+      - personality profile
+      - style adaptation
     """
 
-    # 1. Save user message into memory
-    save_message(user_id, "user", message)
-
-    # 2. Load existing personality profile
-    personality = load_personality(user_id)
-
-    # 3. Emotion detection
+    # 1. Analyze emotion of current message
     emotion_result = analyze_emotion(message)
+    emotion = emotion_result["detected_emotions"][0]
 
-    # 4. Update personality based on emotion + message style
-    personality = update_personality(user_id, message, emotion_result)
+    # 2. Add this message to memory (now linked to user_id)
+    memory_service.add_memory(user_id, message, emotion)
 
-    # 5. Get recent memory (last 5 messages)
-    memory_snippet = get_recent_memory(user_id, limit=5)
+    # 3. Check if similar memory exists
+    similar = memory_service.find_similar_memory(user_id, message)
 
-    # 6. Generate base response
-    base_response = build_base_response(message, emotion_result, memory_snippet)
+    # 4. Get personality summary for this user
+    personality = memory_service.summarize_personality(user_id)
 
-    # 7. Apply personality (tone, slang, quirks, etc.)
-    final_response = apply_personality(base_response, personality)
+    # ---------- REPLY GENERATION LOGIC ---------- #
 
-    # 8. Save bot response into memory
-    save_message(user_id, "bot", final_response)
+    # If a similar message exists → respond contextually
+    if similar:
+        prev_text = similar["text"]
+        prev_emotion = similar["emotion"]
 
-    return {
-        "emotion": emotion_result["emotion"],
-        "response": final_response,
-        "personality": personality,
-    }
+        return (
+            f"I remember you mentioned something similar earlier. "
+            f"Last time you felt **{prev_emotion}**, and you said:\n"
+            f"\"{prev_text}\".\n\n"
+            f"Does this feel like the same situation, or is it different this time?"
+        )
 
+    # If no similar memory, generate fresh reply
+    if emotion != "unknown":
+        base_reply = emotion_result["advice"]
+    else:
+        base_reply = "I'm here with you. Tell me what's on your mind."
 
-# ---------------------------------------------------------
-# Helper: Base emotional response generator
-# ---------------------------------------------------------
+    # Style adaptation based on user personality
+    style_tail = ""
 
-def build_base_response(message: str, emotion_data: dict, memory):
-    """
-    Creates a raw emotional response before personality is applied.
-    """
+    # If user expresses mostly positive emotions → energetic tone
+    if personality["dominant_emotion"] in ["happy", "hopeful", "motivated"]:
+        style_tail = " 😄"
 
-    emotion = emotion_data.get("emotion")
-    advice = emotion_data.get("advice")
+    # If user expresses heavy emotions → calmer tone
+    elif personality["dominant_emotion"] in ["sad", "broken", "anxious", "lonely"]:
+        style_tail = " I'm right here with you."
 
-    # If emotion is unknown → neutral supportive response
-    if emotion == "unknown":
-        return f"I hear you. {advice}"
+    # If user tends to write long messages → more detailed replies
+    if personality["memory_count"] > 5 and similar is None:
+        base_reply += " And I want to understand you even better, keep talking to me."
 
-    # If emotion is known
-    return f"I can sense you're feeling {emotion}. {advice}"
+    return base_reply + style_tai
