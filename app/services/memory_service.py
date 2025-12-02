@@ -2,28 +2,59 @@
 
 import difflib
 from collections import defaultdict
+from pymongo import MongoClient
+from datetime import datetime
 
 
 class MemoryService:
     def __init__(self):
-        # Stores memory PER USER
-        # { user_id: [ { "text": "...", "emotion": "sad" }, ... ] }
-        self.user_memory = defaultdict(list)
+        """
+        MongoDB-backed memory system.
+        Each memory is stored as:
+            {
+                user_id: str,
+                text: str,
+                emotion: str,
+                timestamp: datetime
+            }
+        """
 
+        # Connect to local MongoDB
+        self.client = MongoClient("mongodb://localhost:27017/")
+        self.db = self.client["ai_buddy"]
+        self.collection = self.db["memories"]
+
+        # Index recommended (faster lookups)
+        self.collection.create_index("user_id")
+
+    # ----------------------------------------------------
+    # ADD MEMORY
+    # ----------------------------------------------------
     def add_memory(self, user_id: str, text: str, emotion: str):
-        """Store message + emotion for a specific user."""
-        self.user_memory[user_id].append({
+        """Store message + emotion for a user in MongoDB."""
+
+        self.collection.insert_one({
+            "user_id": user_id,
             "text": text,
-            "emotion": emotion
+            "emotion": emotion,
+            "timestamp": datetime.utcnow()
         })
 
-        # keep only last 20 memories per user
-        if len(self.user_memory[user_id]) > 20:
-            self.user_memory[user_id] = self.user_memory[user_id][-20:]
+        # Keep only last 20 memories
+        all_memories = list(self.collection.find({"user_id": user_id}).sort("timestamp", -1))
 
+        if len(all_memories) > 20:
+            # delete extras
+            ids_to_delete = [m["_id"] for m in all_memories[20:]]
+            self.collection.delete_many({"_id": {"$in": ids_to_delete}})
+
+    # ----------------------------------------------------
+    # FIND SIMILAR MEMORY
+    # ----------------------------------------------------
     def find_similar_memory(self, user_id: str, new_text: str):
-        """Return the most similar previous message from a user."""
-        memories = self.user_memory.get(user_id, [])
+        """Return the most similar previous message from MongoDB."""
+        memories = list(self.collection.find({"user_id": user_id}))
+
         if not memories:
             return None
 
@@ -36,12 +67,15 @@ class MemoryService:
                 best_score = score
                 best_match = mem
 
-        # Only consider it similar if similarity > 0.6
         return best_match if best_score > 0.6 else None
 
+    # ----------------------------------------------------
+    # SUMMARIZE PERSONALITY
+    # ----------------------------------------------------
     def summarize_personality(self, user_id: str):
-        """Analyze user memory to determine emotional tendencies."""
-        memories = self.user_memory.get(user_id, [])
+        """Analyze MongoDB memory to determine emotional tendencies."""
+        memories = list(self.collection.find({"user_id": user_id}))
+
         if not memories:
             return {
                 "dominant_emotion": "unknown",
@@ -50,10 +84,10 @@ class MemoryService:
 
         # Count emotional frequencies
         emotion_count = defaultdict(int)
+
         for m in memories:
             emotion_count[m["emotion"]] += 1
 
-        # Find the most common emotion
         dominant = max(emotion_count, key=emotion_count.get)
 
         return {
@@ -62,5 +96,5 @@ class MemoryService:
         }
 
 
-# create global instance
+# global instance
 memory_service = MemoryService()
